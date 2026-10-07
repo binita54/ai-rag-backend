@@ -7,6 +7,11 @@ from typing import Protocol, runtime_checkable
 class EmbeddingPort(Protocol):
     """Contract for text embedding providers."""
 
+    @property
+    def dimension(self) -> int:
+        """Dimension of the embedding vectors."""
+        ...
+
     async def embed_query(self, text: str) -> list[float]:
         """Embed a single query text."""
         ...

@@ -1,6 +1,16 @@
 """Vector store interface."""
 
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+
+@dataclass(frozen=True)
+class VectorSearchResult:
+    """A single similarity search hit with its payload metadata."""
+
+    id: int | str
+    score: float
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -21,10 +31,10 @@ class VectorStorePort(Protocol):
         query_vector: list[float],
         limit: int = 5,
         filters: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[VectorSearchResult]:
         """Run a nearest-neighbor search."""
         ...
 
-    async def delete_by_document(self, collection_name: str, document_id: str) -> None:
+    async def delete_by_document(self, collection_name: str, document_id: int | str) -> None:
         """Remove all points belonging to a document."""
         ...
