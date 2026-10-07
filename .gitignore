@@ -22,9 +22,10 @@ env/
 .coverage
 htmlcov/
 
-# IDE files
+# IDE and tool files
 .idea/
 .vscode/
+.kilo/
 *.swp
 
 # SQLite / database files
@@ -36,8 +37,8 @@ htmlcov/
 data/*
 !data/.gitkeep
 
-# Model and cache files
-models/
+# Downloaded ML model weights (project root only)
+/models/
 .cache/
 *.bin
 *.safetensors
