@@ -1,0 +1,44 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing and linting
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+
+# SQLite / database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Local data: Qdrant storage, uploads, databases (keep .gitkeep)
+data/*
+!data/.gitkeep
+
+# Model and cache files
+models/
+.cache/
+*.bin
+*.safetensors
+*.onnx
