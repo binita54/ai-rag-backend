@@ -1,6 +1,7 @@
 """Interview booking persistence service."""
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.booking import InterviewBooking
@@ -37,7 +38,14 @@ class BookingService:
                     time=payload.time,
                 )
                 session.add(booking)
-                await session.commit()
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    existing = await self._find_duplicate(session, payload)
+                    if existing is not None:
+                        return existing
+                    raise
                 await session.refresh(booking)
                 return booking
         except Exception as error:

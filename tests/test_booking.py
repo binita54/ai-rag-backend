@@ -4,8 +4,8 @@ from datetime import date, time
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import inspect, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -122,6 +122,106 @@ async def test_different_time_creates_separate_booking(
         rows = list(result.scalars().all())
 
     assert len(rows) == 2
+
+
+async def test_unique_constraint_covers_name_email_date_time(
+    db_engine, session_factory
+) -> None:
+    async with db_engine.connect() as connection:
+        def read_constraints(sync_conn) -> list[dict]:
+            return inspect(sync_conn).get_unique_constraints(
+                "interview_bookings"
+            )
+
+        constraints = await connection.run_sync(read_constraints)
+
+    assert any(
+        set(constraint["column_names"]) == {"name", "email", "date", "time"}
+        for constraint in constraints
+    )
+
+
+async def test_database_rejects_duplicate_row_directly(
+    session_factory,
+) -> None:
+    payload = _payload()
+
+    async with session_factory() as session:
+        session.add(
+            InterviewBooking(
+                name=payload.name,
+                email=payload.email,
+                date=payload.date,
+                time=payload.time,
+            )
+        )
+        await session.commit()
+
+        session.add(
+            InterviewBooking(
+                name=payload.name,
+                email=payload.email,
+                date=payload.date,
+                time=payload.time,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+
+
+async def test_concurrent_duplicate_resolves_to_existing_booking(
+    booking_service: BookingService,
+    session_factory,
+    monkeypatch,
+) -> None:
+    first = await booking_service.book(_payload())
+
+    original_find_duplicate = BookingService._find_duplicate
+    checks = {"count": 0}
+
+    async def miss_first_check(self, session, payload):
+        checks["count"] += 1
+        if checks["count"] == 1:
+            return None
+        return await original_find_duplicate(self, session, payload)
+
+    monkeypatch.setattr(BookingService, "_find_duplicate", miss_first_check)
+
+    second = await booking_service.book(_payload())
+
+    assert second.id == first.id
+
+    async with session_factory() as session:
+        result = await session.execute(select(InterviewBooking))
+        rows = list(result.scalars().all())
+
+    assert len(rows) == 1
+
+
+async def test_unresolved_integrity_error_is_surfaced_as_booking_error(
+    booking_service: BookingService,
+    session_factory,
+    monkeypatch,
+) -> None:
+    payload = _payload()
+    async with session_factory() as session:
+        session.add(
+            InterviewBooking(
+                name=payload.name,
+                email=payload.email,
+                date=payload.date,
+                time=payload.time,
+            )
+        )
+        await session.commit()
+
+    async def find_nothing(self, session, payload):
+        return None
+
+    monkeypatch.setattr(BookingService, "_find_duplicate", find_nothing)
+
+    with pytest.raises(BookingError):
+        await booking_service.book(payload)
 
 
 async def test_database_failure_is_surfaced_as_booking_error() -> None:

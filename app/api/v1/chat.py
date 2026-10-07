@@ -26,9 +26,13 @@ async def chat(
             request.conversation_id, request.message
         )
     except RAGRetrievalError as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(
+            status_code=502, detail="RAG retrieval service unavailable"
+        ) from error
     except RAGGenerationError as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(
+            status_code=502, detail="LLM generation service unavailable"
+        ) from error
     except RAGBookingError as error:
         raise HTTPException(
             status_code=500, detail="Failed to book the interview"

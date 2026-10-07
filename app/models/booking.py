@@ -2,7 +2,15 @@
 
 from datetime import date, datetime, time
 
-from sqlalchemy import Date, DateTime, Integer, String, Time, func
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Integer,
+    String,
+    Time,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -12,6 +20,15 @@ class InterviewBooking(Base):
     """An interview booking created through the chat LLM."""
 
     __tablename__ = "interview_bookings"
+    __table_args__ = (
+        UniqueConstraint(
+            "name",
+            "email",
+            "date",
+            "time",
+            name="uq_interview_bookings_name_email_date_time",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

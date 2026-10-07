@@ -319,6 +319,10 @@ async def test_retrieval_error_maps_to_502(
         json={"conversation_id": "demo-123", "message": "hi"},
     )
     assert response.status_code == 502
+    assert (
+        response.json()["detail"] == "RAG retrieval service unavailable"
+    )
+    assert "embedding failed" not in response.text
 
 
 async def test_generation_error_maps_to_502(
@@ -330,6 +334,10 @@ async def test_generation_error_maps_to_502(
         json={"conversation_id": "demo-123", "message": "hi"},
     )
     assert response.status_code == 502
+    assert (
+        response.json()["detail"] == "LLM generation service unavailable"
+    )
+    assert "llm failed" not in response.text
 
 
 async def test_unexpected_rag_error_maps_to_500(

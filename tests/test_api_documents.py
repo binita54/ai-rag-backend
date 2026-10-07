@@ -291,6 +291,10 @@ async def test_embedding_failure_rolls_back(
         app.dependency_overrides[get_embedding_service] = lambda: embedding_service
 
     assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "Document vector storage service unavailable"
+    )
+    assert "simulated embedding failure" not in response.text
     assert await _all_documents(db_session_factory) == []
     assert await _all_chunks(db_session_factory) == []
     assert await vector_store.search(
@@ -312,6 +316,10 @@ async def test_vector_store_failure_cleans_up(
         app.dependency_overrides.pop(get_vector_store, None)
 
     assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "Document vector storage service unavailable"
+    )
+    assert "simulated failure after partial upsert" not in response.text
 
     assert await _all_documents(db_session_factory) == []
     assert await _all_chunks(db_session_factory) == []

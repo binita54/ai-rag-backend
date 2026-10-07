@@ -48,7 +48,10 @@ async def upload_document(
             overlap=overlap,
         )
     except DocumentProcessingError as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        raise HTTPException(
+            status_code=502,
+            detail="Document vector storage service unavailable",
+        ) from error
     except DocumentIngestionError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
