@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.main import app
 from app.models import Document, DocumentChunk, InterviewBooking
 from app.models import database as database_module
 from app.models.database import Base, get_db
@@ -33,6 +34,24 @@ async def test_init_db_creates_tables(tmp_path, monkeypatch):
     monkeypatch.setattr(database_module, "engine", engine)
 
     await database_module.init_db()
+
+    async with engine.connect() as connection:
+        table_names = await connection.run_sync(
+            lambda sync_conn: set(inspect(sync_conn).get_table_names())
+        )
+    assert EXPECTED_TABLES <= table_names
+    await engine.dispose()
+
+
+async def test_app_startup_creates_tables(tmp_path, monkeypatch):
+    """Application startup should create tables in a fresh database."""
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/startup.db"
+    )
+    monkeypatch.setattr(database_module, "engine", engine)
+
+    async with app.router.lifespan_context(app):
+        pass
 
     async with engine.connect() as connection:
         table_names = await connection.run_sync(

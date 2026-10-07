@@ -1,5 +1,6 @@
 """Explicit retrieval-augmented generation orchestration."""
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,11 @@ BOOKING_FIELD_HINTS: dict[str, str] = {
     "date": "the interview date (YYYY-MM-DD)",
     "time": "the interview time (HH:MM)",
 }
+
+BOOKING_INTENT_PATTERN = re.compile(
+    r"\b(?:book|reschedul|schedul|appointment|interview|meeting|slot)",
+    re.IGNORECASE,
+)
 
 
 class RAGError(Exception):
@@ -120,7 +126,8 @@ class RAGService:
         context, sources = self._build_context(results)
         history = await self._get_history(conversation_id)
         messages = self._build_messages(history, context, message)
-        response = await self._generate(messages)
+        booking_intent = _booking_intent_detected(message, history)
+        response = await self._generate(messages, booking_intent)
         answer = await self._resolve_answer(response)
         await self._persist_turn(conversation_id, message, answer)
         return RAGAnswer(
@@ -223,18 +230,30 @@ class RAGService:
         )
         return messages
 
-    async def _generate(self, messages: list[LLMMessage]) -> LLMResponse:
+    async def _generate(
+        self,
+        messages: list[LLMMessage],
+        booking_intent: bool,
+    ) -> LLMResponse:
         try:
-            return await self._llm.chat(messages, tools=self._tool_specs())
+            return await self._llm.chat(
+                messages, tools=self._tool_specs(booking_intent)
+            )
         except LLMProviderError as error:
             raise RAGGenerationError(
                 f"Failed to generate an answer: {error}"
             ) from error
 
-    def _tool_specs(self) -> list[dict[str, Any]] | None:
-        if not self._tools:
-            return None
-        return [tool.to_spec() for tool in self._tools]
+    def _tool_specs(
+        self, booking_intent: bool
+    ) -> list[dict[str, Any]] | None:
+        specs = [
+            tool.to_spec()
+            for tool in self._tools
+            if booking_intent
+            or tool.name != BOOK_INTERVIEW_TOOL_NAME
+        ]
+        return specs or None
 
     async def _resolve_answer(self, response: LLMResponse) -> str:
         """Turn the LLM response into the final assistant answer."""
@@ -242,14 +261,18 @@ class RAGService:
             return response.content
         for tool_call in response.tool_calls:
             if tool_call.name == BOOK_INTERVIEW_TOOL_NAME:
-                return await self._book_interview(tool_call)
+                return await self._book_interview(
+                    tool_call, response.content
+                )
         return (
             response.content
             or "I received a response I could not act on. "
             "Please try rephrasing your request."
         )
 
-    async def _book_interview(self, tool_call: ToolCall) -> str:
+    async def _book_interview(
+        self, tool_call: ToolCall, content: str
+    ) -> str:
         """Validate a booking tool call and persist the interview."""
         if self._booking_service is None:
             raise RAGError("No booking service is configured")
@@ -261,6 +284,8 @@ class RAGService:
         try:
             payload = InterviewBookingCreate(**arguments)
         except ValidationError as error:
+            if content.strip():
+                return content
             return _booking_guidance(error)
 
         try:
@@ -307,4 +332,24 @@ def _format_booking_confirmation(booking: InterviewBooking) -> str:
         "Your interview has been booked for "
         f"{booking.date.isoformat()} at "
         f"{booking.time.strftime('%H:%M')}."
+    )
+
+
+def _booking_intent_detected(
+    message: str, history: list[dict[str, str]]
+) -> bool:
+    """Return whether the user plausibly wants to book an interview.
+
+    The gate is intentionally lightweight: a booking keyword in the
+    current message or in any earlier user turn counts as plausible
+    intent. Scanning history keeps the booking tool available across
+    multi-turn follow-ups that supply details without repeating a
+    keyword.
+    """
+    if BOOKING_INTENT_PATTERN.search(message):
+        return True
+    return any(
+        item.get("role") == "user"
+        and BOOKING_INTENT_PATTERN.search(str(item.get("content", "")))
+        for item in history
     )

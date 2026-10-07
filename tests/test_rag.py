@@ -654,6 +654,7 @@ async def test_confirmation_uses_persisted_booking_data() -> None:
 async def test_missing_booking_fields_ask_for_information() -> None:
     booking_service = FakeBookingService(booking=_booking())
     llm = FakeLLMProvider(
+        content="",
         tool_calls=[
             _booking_tool_call({"name": "Binita Ghale"})
         ]
@@ -677,6 +678,7 @@ async def test_missing_booking_fields_ask_for_information() -> None:
 async def test_empty_tool_arguments_ask_for_everything() -> None:
     booking_service = FakeBookingService(booking=_booking())
     llm = FakeLLMProvider(
+        content="",
         tool_calls=[_booking_tool_call({})]
     )
     harness = Harness(
@@ -697,6 +699,7 @@ async def test_empty_tool_arguments_ask_for_everything() -> None:
 async def test_invalid_tool_arguments_do_not_create_booking() -> None:
     booking_service = FakeBookingService(booking=_booking())
     llm = FakeLLMProvider(
+        content="",
         tool_calls=[
             _booking_tool_call(
                 {
@@ -725,6 +728,7 @@ async def test_invalid_tool_arguments_do_not_create_booking() -> None:
 async def test_invalid_date_in_tool_arguments_is_rejected() -> None:
     booking_service = FakeBookingService(booking=_booking())
     llm = FakeLLMProvider(
+        content="",
         tool_calls=[
             _booking_tool_call(
                 {
@@ -746,6 +750,115 @@ async def test_invalid_date_in_tool_arguments_is_rejected() -> None:
 
     assert booking_service.booked == []
     assert "date" in result.answer
+
+
+async def test_invalid_tool_call_returns_llm_content() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        content="Qdrant is used for vector storage.",
+        tool_calls=[_booking_tool_call({})],
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1",
+        "According to the document, what vector database is used?",
+    )
+
+    assert result.answer == "Qdrant is used for vector storage."
+    assert booking_service.booked == []
+
+
+async def test_blank_content_with_invalid_tool_call_asks_for_information() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        content="   ",
+        tool_calls=[_booking_tool_call({})],
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book an interview"
+    )
+
+    assert booking_service.booked == []
+    assert result.answer.startswith("I still need")
+
+
+async def test_ordinary_question_does_not_offer_booking_tool() -> None:
+    harness = Harness(
+        booking_service=FakeBookingService(booking=_booking()),
+        tools=[BOOKING_TOOL],
+    )
+
+    await harness.service.answer(
+        "conv-1",
+        "According to the uploaded document, what vector "
+        "database is used?",
+    )
+
+    assert harness.llm.tools_received == [None]
+
+
+async def test_explicit_booking_request_offers_booking_tool() -> None:
+    harness = Harness(
+        booking_service=FakeBookingService(booking=_booking()),
+        tools=[BOOKING_TOOL],
+    )
+
+    await harness.service.answer(
+        "conv-1", "I want to book an interview."
+    )
+
+    assert harness.llm.tools_received == [[BOOKING_TOOL.to_spec()]]
+
+
+async def test_booking_follow_up_keeps_tool_from_history() -> None:
+    harness = Harness(
+        booking_service=FakeBookingService(booking=_booking()),
+        tools=[BOOKING_TOOL],
+    )
+    harness.memory.histories["conv-1"] = [
+        {"role": "user", "content": "I want to book an interview."},
+        {
+            "role": "assistant",
+            "content": (
+                "I still need some information before I can book "
+                "the interview."
+            ),
+        },
+    ]
+
+    await harness.service.answer(
+        "conv-1", "My email is user@example.com"
+    )
+
+    assert harness.llm.tools_received == [[BOOKING_TOOL.to_spec()]]
+
+
+async def test_non_booking_keyword_question_answers_normally() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=FakeLLMProvider(content="the answer"),
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "What is a meeting?"
+    )
+
+    assert harness.llm.tools_received == [[BOOKING_TOOL.to_spec()]]
+    assert result.answer == "the answer"
+    assert booking_service.booked == []
 
 
 async def test_failed_booking_persistence_raises_error() -> None:

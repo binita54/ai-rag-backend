@@ -251,7 +251,7 @@ python -m pytest -q
 ruff check .
 ```
 
-The suite currently contains 181 tests covering extraction, chunking,
+The suite currently contains 188 tests covering extraction, chunking,
 embeddings, the Qdrant vector store, Redis memory, the LLM provider, the
 RAG pipeline, booking, and the API endpoints. Tests use fakes/mocks,
 `fakeredis`, and temporary local Qdrant/SQLite directories; they do not call
@@ -317,5 +317,5 @@ APIs only, and FastAPI's generated `/docs` is the only interactive surface.
 The backend is fully implemented and tested. Both required REST APIs —
 document ingestion and conversational RAG — are working, including multi-turn
 memory and LLM-driven interview booking with validation, persistence, and
-duplicate protection. The test suite (177 tests) and Ruff linting pass
+duplicate protection. The test suite (188 tests) and Ruff linting pass
 cleanly.

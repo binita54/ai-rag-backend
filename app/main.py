@@ -1,9 +1,19 @@
 """FastAPI application entry point."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.models.database import init_db
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Initialize the database before serving requests."""
+    await init_db()
+    yield
 
 
 def create_app() -> FastAPI:
@@ -15,6 +25,7 @@ def create_app() -> FastAPI:
         description="Conversational RAG backend with document ingestion and interview booking.",
         version="0.1.0",
         debug=settings.APP_DEBUG,
+        lifespan=lifespan,
     )
 
     application.include_router(api_router)
