@@ -7,6 +7,7 @@ from app.services.documents.ingestion import DocumentIngestionService
 from app.services.embeddings import SentenceTransformerEmbeddingService
 from app.services.llm import OpenAICompatibleProvider
 from app.services.memory import RedisMemoryStore
+from app.services.rag import RAGService
 from app.services.vector_store import QdrantVectorStore
 
 _embedding_service: SentenceTransformerEmbeddingService | None = None
@@ -59,4 +60,26 @@ def get_document_ingestion_service(
         embedding_service=embedding_service,
         vector_store=vector_store,
         collection_name=settings.QDRANT_COLLECTION_NAME,
+    )
+
+
+def get_rag_service(
+    embedding_service: SentenceTransformerEmbeddingService = Depends(
+        get_embedding_service
+    ),
+    vector_store: QdrantVectorStore = Depends(get_vector_store),
+    memory_store: RedisMemoryStore = Depends(get_memory_store),
+    llm_provider: OpenAICompatibleProvider = Depends(get_llm_provider),
+) -> RAGService:
+    """Provide the RAG orchestration service."""
+    settings = get_settings()
+    return RAGService(
+        embedding_service=embedding_service,
+        vector_store=vector_store,
+        memory_store=memory_store,
+        llm_provider=llm_provider,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
+        top_k=settings.RAG_TOP_K,
+        score_threshold=settings.RAG_SCORE_THRESHOLD,
+        max_context_chars=settings.RAG_MAX_CONTEXT_CHARS,
     )

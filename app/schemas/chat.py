@@ -2,37 +2,35 @@
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.booking import InterviewBookingResponse
+MAX_MESSAGE_LENGTH = 4000
 
 
 class ChatRequest(BaseModel):
     """Incoming chat message for the RAG endpoint."""
 
-    message: str = Field(min_length=1)
-    conversation_id: str | None = None
+    conversation_id: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
 
-    @field_validator("conversation_id", mode="before")
+    @field_validator("conversation_id", "message")
     @classmethod
-    def empty_conversation_id_to_none(cls, value: object) -> object:
-        """Treat an empty conversation id as a new conversation."""
-        if isinstance(value, str) and not value.strip():
-            return None
+    def reject_blank_values(cls, value: str) -> str:
+        """Reject whitespace-only values."""
+        if not value.strip():
+            raise ValueError("field must not be empty")
         return value
 
 
 class SourceResponse(BaseModel):
     """A retrieved chunk cited as a source for an answer."""
 
-    document_id: int
     filename: str
     chunk_index: int
-    text: str
+    score: float
 
 
 class ChatResponse(BaseModel):
-    """RAG answer with retrieved sources and optional booking result."""
+    """RAG answer with the retrieved sources."""
 
     conversation_id: str
     answer: str
     sources: list[SourceResponse] = Field(default_factory=list)
-    booking: InterviewBookingResponse | None = None

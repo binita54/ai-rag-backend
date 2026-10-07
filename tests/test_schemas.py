@@ -65,15 +65,33 @@ def test_empty_name_rejected() -> None:
 
 def test_valid_chat_request() -> None:
     """A chat message should validate."""
-    request = ChatRequest(message="What is RAG?")
+    request = ChatRequest(conversation_id="demo-123", message="What is RAG?")
     assert request.message == "What is RAG?"
-    assert request.conversation_id is None
+    assert request.conversation_id == "demo-123"
 
 
-def test_chat_request_empty_conversation_id_normalized() -> None:
-    """An empty conversation id should be treated as a new conversation."""
-    request = ChatRequest(message="Hello", conversation_id="   ")
-    assert request.conversation_id is None
+def test_chat_request_empty_conversation_id_rejected() -> None:
+    """An empty conversation id should be rejected."""
+    with pytest.raises(ValidationError):
+        ChatRequest(conversation_id="   ", message="Hello")
+
+
+def test_chat_request_missing_conversation_id_rejected() -> None:
+    """A missing conversation id should raise a validation error."""
+    with pytest.raises(ValidationError):
+        ChatRequest(message="Hello")
+
+
+def test_chat_request_oversized_message_rejected() -> None:
+    """A message exceeding the maximum length should be rejected."""
+    with pytest.raises(ValidationError):
+        ChatRequest(conversation_id="demo-123", message="x" * 4001)
+
+
+def test_chat_request_whitespace_message_rejected() -> None:
+    """A whitespace-only message should raise a validation error."""
+    with pytest.raises(ValidationError):
+        ChatRequest(conversation_id="demo-123", message="   ")
 
 
 def test_chat_request_missing_message_rejected() -> None:

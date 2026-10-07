@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     REDIS_TTL_SECONDS: int = 86400
     REDIS_MAX_HISTORY: int = 50
 
+    RAG_TOP_K: int = 5
+    RAG_SCORE_THRESHOLD: float = 0.0
+    RAG_MAX_CONTEXT_CHARS: int = 12000
+
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DEVICE: str = "cpu"
 

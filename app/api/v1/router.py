@@ -2,9 +2,9 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.chat import chat_router
 from app.api.v1.documents import documents_router
 
-chat_router = APIRouter(prefix="/chat", tags=["chat"])
 bookings_router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 api_router = APIRouter(prefix="/api/v1")
