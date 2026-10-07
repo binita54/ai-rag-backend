@@ -1,4 +1,4 @@
-"""Document processing services: extraction and chunking."""
+"""Document processing services: extraction, chunking, and ingestion."""
 
 from app.services.documents.chunker import (
     Chunk,
@@ -15,11 +15,19 @@ from app.services.documents.extractor import (
     extract_text,
     extract_text_from_path,
 )
+from app.services.documents.ingestion import (
+    DocumentIngestionError,
+    DocumentIngestionService,
+    DocumentProcessingError,
+)
 
 __all__ = [
     "Chunk",
     "ChunkingError",
     "DocumentExtractionError",
+    "DocumentIngestionError",
+    "DocumentIngestionService",
+    "DocumentProcessingError",
     "EmptyDocumentError",
     "ExtractionFailureError",
     "UnsupportedFileTypeError",

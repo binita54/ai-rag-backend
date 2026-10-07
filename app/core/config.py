@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "Palm Mind AI RAG Backend"
     APP_DEBUG: bool = False
+    MAX_UPLOAD_SIZE: int = 25 * 1024 * 1024
 
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/ai_rag.db"
 

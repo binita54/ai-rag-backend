@@ -1,8 +1,9 @@
-"""Versioned API router. Feature endpoints are attached in later implementation steps."""
+"""Versioned API router."""
 
 from fastapi import APIRouter
 
-documents_router = APIRouter(prefix="/documents", tags=["documents"])
+from app.api.v1.documents import documents_router
+
 chat_router = APIRouter(prefix="/chat", tags=["chat"])
 bookings_router = APIRouter(prefix="/bookings", tags=["bookings"])
 
