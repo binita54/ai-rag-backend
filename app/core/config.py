@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_TTL_SECONDS: int = 86400
+    REDIS_MAX_HISTORY: int = 50
 
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DEVICE: str = "cpu"
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_MODEL: str = "llama3.2"
     LLM_TEMPERATURE: float = 0.2
+    LLM_TIMEOUT: float = 60.0
 
 
 @lru_cache

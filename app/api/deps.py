@@ -5,10 +5,14 @@ from fastapi import Depends
 from app.core.config import get_settings
 from app.services.documents.ingestion import DocumentIngestionService
 from app.services.embeddings import SentenceTransformerEmbeddingService
+from app.services.llm import OpenAICompatibleProvider
+from app.services.memory import RedisMemoryStore
 from app.services.vector_store import QdrantVectorStore
 
 _embedding_service: SentenceTransformerEmbeddingService | None = None
 _vector_store: QdrantVectorStore | None = None
+_memory_store: RedisMemoryStore | None = None
+_llm_provider: OpenAICompatibleProvider | None = None
 
 
 def get_embedding_service() -> SentenceTransformerEmbeddingService:
@@ -25,6 +29,22 @@ def get_vector_store() -> QdrantVectorStore:
     if _vector_store is None:
         _vector_store = QdrantVectorStore()
     return _vector_store
+
+
+def get_memory_store() -> RedisMemoryStore:
+    """Provide the shared Redis conversation memory store."""
+    global _memory_store
+    if _memory_store is None:
+        _memory_store = RedisMemoryStore()
+    return _memory_store
+
+
+def get_llm_provider() -> OpenAICompatibleProvider:
+    """Provide the shared LLM provider."""
+    global _llm_provider
+    if _llm_provider is None:
+        _llm_provider = OpenAICompatibleProvider()
+    return _llm_provider
 
 
 def get_document_ingestion_service(
