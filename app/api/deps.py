@@ -3,6 +3,9 @@
 from fastapi import Depends
 
 from app.core.config import get_settings
+from app.models.database import AsyncSessionLocal
+from app.services.booking import BookingService
+from app.services.booking.tools import BOOK_INTERVIEW_TOOL
 from app.services.documents.ingestion import DocumentIngestionService
 from app.services.embeddings import SentenceTransformerEmbeddingService
 from app.services.llm import OpenAICompatibleProvider
@@ -14,6 +17,7 @@ _embedding_service: SentenceTransformerEmbeddingService | None = None
 _vector_store: QdrantVectorStore | None = None
 _memory_store: RedisMemoryStore | None = None
 _llm_provider: OpenAICompatibleProvider | None = None
+_booking_service: BookingService | None = None
 
 
 def get_embedding_service() -> SentenceTransformerEmbeddingService:
@@ -48,6 +52,16 @@ def get_llm_provider() -> OpenAICompatibleProvider:
     return _llm_provider
 
 
+def get_booking_service() -> BookingService:
+    """Provide the shared interview booking service."""
+    global _booking_service
+    if _booking_service is None:
+        _booking_service = BookingService(
+            session_factory=AsyncSessionLocal
+        )
+    return _booking_service
+
+
 def get_document_ingestion_service(
     embedding_service: SentenceTransformerEmbeddingService = Depends(
         get_embedding_service
@@ -70,6 +84,7 @@ def get_rag_service(
     vector_store: QdrantVectorStore = Depends(get_vector_store),
     memory_store: RedisMemoryStore = Depends(get_memory_store),
     llm_provider: OpenAICompatibleProvider = Depends(get_llm_provider),
+    booking_service: BookingService = Depends(get_booking_service),
 ) -> RAGService:
     """Provide the RAG orchestration service."""
     settings = get_settings()
@@ -82,4 +97,6 @@ def get_rag_service(
         top_k=settings.RAG_TOP_K,
         score_threshold=settings.RAG_SCORE_THRESHOLD,
         max_context_chars=settings.RAG_MAX_CONTEXT_CHARS,
+        booking_service=booking_service,
+        tools=[BOOK_INTERVIEW_TOOL],
     )

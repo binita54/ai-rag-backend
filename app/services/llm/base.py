@@ -22,6 +22,26 @@ class ToolCall:
 
 
 @dataclass
+class LLMTool:
+    """A structured tool the model may request."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+    def to_spec(self) -> dict[str, Any]:
+        """Return the OpenAI-compatible tool specification."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+
+@dataclass
 class LLMResponse:
     """Provider-agnostic LLM response."""
 

@@ -64,6 +64,30 @@ def _completion(content: str | None) -> SimpleNamespace:
     )
 
 
+def _tool_completion(
+    content: str | None, tool_name: str, arguments_json: str
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content,
+                    tool_calls=[
+                        SimpleNamespace(
+                            id="call_1",
+                            type="function",
+                            function=SimpleNamespace(
+                                name=tool_name,
+                                arguments=arguments_json,
+                            ),
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+
+
 def _provider(
     response: Any = None,
     error: Exception | None = None,
@@ -202,3 +226,76 @@ async def test_timeout_configurable() -> None:
         assert provider._client.timeout == 12.0
     finally:
         await provider.close()
+
+
+async def test_tools_are_sent_to_the_sdk() -> None:
+    tool_spec = {
+        "type": "function",
+        "function": {
+            "name": "book_interview",
+            "description": "Book an interview",
+            "parameters": {"type": "object"},
+        },
+    }
+    provider, client = _provider(response=_completion("answer"))
+
+    await provider.chat(
+        [LLMMessage(role="user", content="book it")],
+        tools=[tool_spec],
+    )
+
+    assert client.chat.completions.calls[0]["tools"] == [tool_spec]
+
+
+async def test_tools_are_omitted_when_not_provided() -> None:
+    provider, client = _provider(response=_completion("answer"))
+
+    await provider.chat([LLMMessage(role="user", content="hi")])
+
+    assert "tools" not in client.chat.completions.calls[0]
+
+
+async def test_tool_call_response_is_parsed() -> None:
+    provider, _ = _provider(
+        response=_tool_completion(
+            "", "book_interview", '{"name": "Binita"}'
+        )
+    )
+
+    response = await provider.chat([LLMMessage(role="user", content="hi")])
+
+    assert response.content == ""
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "book_interview"
+    assert response.tool_calls[0].arguments == {"name": "Binita"}
+
+
+async def test_empty_content_with_tool_call_is_allowed() -> None:
+    provider, _ = _provider(
+        response=_tool_completion(None, "book_interview", "{}")
+    )
+
+    response = await provider.chat([LLMMessage(role="user", content="hi")])
+
+    assert response.content == ""
+    assert response.tool_calls[0].name == "book_interview"
+
+
+async def test_malformed_tool_arguments_are_handled_safely() -> None:
+    provider, _ = _provider(
+        response=_tool_completion("", "book_interview", "{not json")
+    )
+
+    response = await provider.chat([LLMMessage(role="user", content="hi")])
+
+    assert response.tool_calls[0].arguments == {}
+
+
+async def test_non_object_tool_arguments_are_handled_safely() -> None:
+    provider, _ = _provider(
+        response=_tool_completion("", "book_interview", '["oops"]')
+    )
+
+    response = await provider.chat([LLMMessage(role="user", content="hi")])
+
+    assert response.tool_calls[0].arguments == {}

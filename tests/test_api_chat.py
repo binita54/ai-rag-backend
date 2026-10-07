@@ -6,6 +6,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 from qdrant_client import AsyncQdrantClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.api.deps import (
+    get_booking_service,
     get_embedding_service,
     get_llm_provider,
     get_memory_store,
@@ -20,9 +22,19 @@ from app.api.deps import (
     get_vector_store,
 )
 from app.main import app
+from app.models.booking import InterviewBooking
 from app.models.database import Base, get_db
 from app.ports.vector_store import VectorSearchResult
-from app.services.llm import LLMProviderError, LLMResponse
+from app.services.booking import (
+    BOOK_INTERVIEW_TOOL,
+    BookingError,
+    BookingService,
+)
+from app.services.llm import (
+    LLMProviderError,
+    LLMResponse,
+    ToolCall,
+)
 from app.services.rag import (
     RAGAnswer,
     RAGError,
@@ -127,6 +139,40 @@ class FakeLLMProvider:
         tools: list[dict] | None = None,
     ) -> LLMResponse:
         return LLMResponse(content=self._content)
+
+
+BOOKING_ARGUMENTS = {
+    "name": "Binita Ghale",
+    "email": "binita@example.com",
+    "date": "2026-10-10",
+    "time": "14:00",
+}
+
+
+class BookingLLM:
+    """Fake LLM that always requests the booking tool."""
+
+    def __init__(self, arguments: dict) -> None:
+        self.arguments = arguments
+        self.tools_received: list[dict] | None | list[
+            list[dict]
+        ] = None
+
+    async def chat(
+        self,
+        messages: list,
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        self.tools_received = tools
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="book_interview",
+                    arguments=self.arguments,
+                )
+            ],
+        )
 
 
 class FakeRAGService:
@@ -432,4 +478,175 @@ async def test_llm_provider_error_is_wrapped_as_generation_error(
         app.dependency_overrides.clear()
 
     assert response.status_code == 502
+    assert memory.appended == []
+
+
+def _booking_engine(tmp_path):
+    return create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/booking-api-test.db"
+    )
+
+
+async def _create_booking_session_factory(engine):
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    return async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+
+async def test_booking_through_chat_end_to_end(tmp_path) -> None:
+    engine = _booking_engine(tmp_path)
+    session_factory = (
+        await _create_booking_session_factory(engine)
+    )
+    booking_service = BookingService(session_factory=session_factory)
+
+    embeddings = FakeEmbeddingService()
+    vector_store = FakeVectorStore(results=[])
+    memory = FakeMemoryStore()
+    llm = BookingLLM(BOOKING_ARGUMENTS)
+
+    app.dependency_overrides[get_embedding_service] = (
+        lambda: embeddings
+    )
+    app.dependency_overrides[get_vector_store] = lambda: vector_store
+    app.dependency_overrides[get_memory_store] = lambda: memory
+    app.dependency_overrides[get_llm_provider] = lambda: llm
+    app.dependency_overrides[get_booking_service] = (
+        lambda: booking_service
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                "/api/v1/chat",
+                json={
+                    "conversation_id": "booking-1",
+                    "message": (
+                        "I'd like to book an interview. My name "
+                        "is Binita Ghale, email is "
+                        "binita@example.com, on October 10 at "
+                        "2 PM."
+                    ),
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["conversation_id"] == "booking-1"
+    assert body["answer"] == (
+        "Your interview has been booked for 2026-10-10 at 14:00."
+    )
+    assert llm.tools_received == [
+        BOOK_INTERVIEW_TOOL.to_spec()
+    ]
+    user_message = (
+        "I'd like to book an interview. My name "
+        "is Binita Ghale, email is "
+        "binita@example.com, on October 10 at "
+        "2 PM."
+    )
+    assert memory.appended == [
+        ("booking-1", "user", user_message),
+        ("booking-1", "assistant", body["answer"]),
+    ]
+
+
+async def test_missing_booking_information_returns_normal_response(
+    tmp_path,
+) -> None:
+    engine = _booking_engine(tmp_path)
+    session_factory = (
+        await _create_booking_session_factory(engine)
+    )
+    booking_service = BookingService(session_factory=session_factory)
+
+    embeddings = FakeEmbeddingService()
+    vector_store = FakeVectorStore(results=[])
+    memory = FakeMemoryStore()
+    llm = BookingLLM({"name": "Binita Ghale"})
+
+    app.dependency_overrides[get_embedding_service] = (
+        lambda: embeddings
+    )
+    app.dependency_overrides[get_vector_store] = lambda: vector_store
+    app.dependency_overrides[get_memory_store] = lambda: memory
+    app.dependency_overrides[get_llm_provider] = lambda: llm
+    app.dependency_overrides[get_booking_service] = (
+        lambda: booking_service
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                "/api/v1/chat",
+                json={
+                    "conversation_id": "booking-2",
+                    "message": "Book an interview for me",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "email" in body["answer"]
+    assert "date" in body["answer"]
+    assert "time" in body["answer"]
+
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(InterviewBooking)
+                )
+            ).scalars().all()
+        )
+    assert rows == []
+
+
+async def test_booking_database_failure_maps_to_500(tmp_path) -> None:
+    class FailingBookingService:
+        async def book(self, payload):
+            raise BookingError("database unavailable")
+
+    embeddings = FakeEmbeddingService()
+    vector_store = FakeVectorStore(results=[])
+    memory = FakeMemoryStore()
+    llm = BookingLLM(BOOKING_ARGUMENTS)
+
+    app.dependency_overrides[get_embedding_service] = (
+        lambda: embeddings
+    )
+    app.dependency_overrides[get_vector_store] = lambda: vector_store
+    app.dependency_overrides[get_memory_store] = lambda: memory
+    app.dependency_overrides[get_llm_provider] = lambda: llm
+    app.dependency_overrides[get_booking_service] = (
+        lambda: FailingBookingService()
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                "/api/v1/chat",
+                json={
+                    "conversation_id": "booking-3",
+                    "message": "Book an interview for me",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500
     assert memory.appended == []

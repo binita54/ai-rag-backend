@@ -74,8 +74,6 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             raise LLMProviderError("LLM response contained no choices")
         choice = completion.choices[0]
         content = choice.message.content
-        if not content or not content.strip():
-            raise LLMProviderError("LLM returned an empty response")
 
         tool_calls = []
         for call in choice.message.tool_calls or []:
@@ -83,9 +81,16 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 arguments = json.loads(call.function.arguments or "{}")
             except json.JSONDecodeError:
                 arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
             tool_calls.append(
                 ToolCall(name=call.function.name, arguments=arguments)
             )
+
+        if not content or not content.strip():
+            if not tool_calls:
+                raise LLMProviderError("LLM returned an empty response")
+            content = ""
 
         return LLMResponse(content=content, tool_calls=tool_calls)
 

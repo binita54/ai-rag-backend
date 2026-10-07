@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.deps import get_rag_service
 from app.schemas.chat import ChatRequest, ChatResponse, SourceResponse
 from app.services.rag import (
+    RAGBookingError,
     RAGError,
     RAGGenerationError,
     RAGRetrievalError,
@@ -28,6 +29,10 @@ async def chat(
         raise HTTPException(status_code=502, detail=str(error)) from error
     except RAGGenerationError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
+    except RAGBookingError as error:
+        raise HTTPException(
+            status_code=500, detail="Failed to book the interview"
+        ) from error
     except RAGError as error:
         raise HTTPException(
             status_code=500, detail="Internal RAG error"

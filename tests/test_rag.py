@@ -1,19 +1,38 @@
 """Tests for the RAG orchestration service."""
 
-import pytest
+from datetime import date, time
 
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.models.booking import InterviewBooking
+from app.models.database import Base
 from app.ports.vector_store import VectorSearchResult
+from app.schemas.booking import InterviewBookingCreate
+from app.services.booking import (
+    BOOK_INTERVIEW_TOOL_NAME,
+    BookingError,
+    BookingService,
+)
 from app.services.embeddings import EmbeddingError
 from app.services.llm import (
     LLMMessage,
     LLMProviderError,
     LLMResponse,
+    LLMTool,
+    ToolCall,
 )
 from app.services.memory import MemoryStoreError
 from app.services.rag import (
     NO_CONTEXT_MESSAGE,
     SYSTEM_PROMPT,
     RAGAnswer,
+    RAGBookingError,
     RAGError,
     RAGGenerationError,
     RAGRetrievalError,
@@ -136,10 +155,13 @@ class FakeLLMProvider:
         self,
         content: str = "the answer",
         error: Exception | None = None,
+        tool_calls: list[ToolCall] | None = None,
     ) -> None:
         self.content = content
         self._error = error
+        self._tool_calls = tool_calls or []
         self.calls: list[list[LLMMessage]] = []
+        self.tools_received: list[list[dict] | None] = []
 
     async def chat(
         self,
@@ -147,9 +169,35 @@ class FakeLLMProvider:
         tools: list[dict] | None = None,
     ) -> LLMResponse:
         self.calls.append(list(messages))
+        self.tools_received.append(tools)
         if self._error is not None:
             raise self._error
-        return LLMResponse(content=self.content)
+        return LLMResponse(
+            content=self.content, tool_calls=list(self._tool_calls)
+        )
+
+
+class FakeBookingService:
+    """Fake booking service capturing validated payloads."""
+
+    def __init__(
+        self,
+        booking: InterviewBooking | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.booking = booking
+        self.error = error
+        self.booked: list[InterviewBookingCreate] = []
+
+    async def book(
+        self, payload: InterviewBookingCreate
+    ) -> InterviewBooking:
+        self.booked.append(payload)
+        if self.error is not None:
+            raise self.error
+        if self.booking is None:
+            raise RuntimeError("no booking configured")
+        return self.booking
 
 
 class Harness:
@@ -168,6 +216,10 @@ class Harness:
         self.llm: FakeLLMProvider = overrides.get("llm_provider") or (
             FakeLLMProvider()
         )
+        self.booking_service: FakeBookingService | None = (
+            overrides.get("booking_service")
+        )
+        self.tools: list[LLMTool] = overrides.get("tools") or []
         self.service: RAGService = RAGService(
             embedding_service=self.embeddings,
             vector_store=self.vector_store,
@@ -181,6 +233,8 @@ class Harness:
             max_context_chars=overrides.get(
                 "max_context_chars", 12000
             ),
+            booking_service=self.booking_service,
+            tools=self.tools or None,
         )
 
 
@@ -477,3 +531,329 @@ async def test_answer_result_type() -> None:
     result = await harness.service.answer("conv-1", "hi")
 
     assert isinstance(result, RAGAnswer)
+
+
+BOOKING_TOOL = LLMTool(
+    name=BOOK_INTERVIEW_TOOL_NAME,
+    description="Book an interview",
+    parameters={"type": "object"},
+)
+
+VALID_ARGUMENTS = {
+    "name": "Binita Ghale",
+    "email": "binita@example.com",
+    "date": "2026-10-10",
+    "time": "14:00",
+}
+
+
+def _booking() -> InterviewBooking:
+    return InterviewBooking(
+        id=1,
+        name="Binita Ghale",
+        email="binita@example.com",
+        date=date(2026, 10, 10),
+        time=time(14, 0),
+    )
+
+
+def _booking_tool_call(arguments: dict) -> ToolCall:
+    return ToolCall(name=BOOK_INTERVIEW_TOOL_NAME, arguments=arguments)
+
+
+async def test_booking_tool_is_offered_to_the_llm() -> None:
+    harness = Harness(tools=[BOOKING_TOOL])
+
+    await harness.service.answer("conv-1", "Book an interview")
+
+    assert harness.llm.tools_received == [[BOOKING_TOOL.to_spec()]]
+
+
+async def test_no_tools_are_sent_when_not_configured() -> None:
+    harness = Harness()
+
+    await harness.service.answer("conv-1", "hi")
+
+    assert harness.llm.tools_received == [None]
+
+
+async def test_normal_question_works_with_booking_configured() -> None:
+    harness = Harness(
+        booking_service=FakeBookingService(booking=_booking()),
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer("conv-1", "What is RAG?")
+
+    assert result.answer == "the answer"
+    assert harness.booking_service.booked == []
+
+
+async def test_valid_tool_call_creates_booking() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        tool_calls=[_booking_tool_call(VALID_ARGUMENTS)]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book me an interview"
+    )
+
+    assert len(booking_service.booked) == 1
+    payload = booking_service.booked[0]
+    assert payload.name == "Binita Ghale"
+    assert payload.email == "binita@example.com"
+    assert payload.date == date(2026, 10, 10)
+    assert payload.time == time(14, 0)
+    assert result.answer == (
+        "Your interview has been booked for 2026-10-10 at 14:00."
+    )
+
+
+async def test_confirmation_uses_persisted_booking_data() -> None:
+    booking = InterviewBooking(
+        id=7,
+        name="Jane Doe",
+        email="jane@example.com",
+        date=date(2026, 11, 2),
+        time=time(9, 30),
+    )
+    booking_service = FakeBookingService(booking=booking)
+    llm = FakeLLMProvider(
+        tool_calls=[
+            _booking_tool_call(
+                {
+                    "name": "Jane Doe",
+                    "email": "jane@example.com",
+                    "date": "2026-11-02",
+                    "time": "09:30",
+                }
+            )
+        ]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book me an interview"
+    )
+
+    assert result.answer == (
+        "Your interview has been booked for 2026-11-02 at 09:30."
+    )
+
+
+async def test_missing_booking_fields_ask_for_information() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        tool_calls=[
+            _booking_tool_call({"name": "Binita Ghale"})
+        ]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book an interview"
+    )
+
+    assert booking_service.booked == []
+    assert result.answer.startswith("I still need")
+    for hint in ("email", "date", "time"):
+        assert hint in result.answer
+
+
+async def test_empty_tool_arguments_ask_for_everything() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        tool_calls=[_booking_tool_call({})]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book an interview"
+    )
+
+    assert booking_service.booked == []
+    for hint in ("name", "email", "date", "time"):
+        assert hint in result.answer
+
+
+async def test_invalid_tool_arguments_do_not_create_booking() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        tool_calls=[
+            _booking_tool_call(
+                {
+                    "name": "Binita Ghale",
+                    "email": "not-an-email",
+                    "date": "2026-10-10",
+                    "time": "14:00",
+                }
+            )
+        ]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book an interview"
+    )
+
+    assert booking_service.booked == []
+    assert "email" in result.answer
+
+
+async def test_invalid_date_in_tool_arguments_is_rejected() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        tool_calls=[
+            _booking_tool_call(
+                {
+                    **VALID_ARGUMENTS,
+                    "date": "not-a-date",
+                }
+            )
+        ]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book an interview"
+    )
+
+    assert booking_service.booked == []
+    assert "date" in result.answer
+
+
+async def test_failed_booking_persistence_raises_error() -> None:
+    booking_service = FakeBookingService(
+        booking=_booking(), error=BookingError("database down")
+    )
+    llm = FakeLLMProvider(
+        tool_calls=[_booking_tool_call(VALID_ARGUMENTS)]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    with pytest.raises(RAGBookingError):
+        await harness.service.answer(
+            "conv-1", "Book an interview"
+        )
+
+    assert len(booking_service.booked) == 1
+    assert harness.memory.appended == []
+
+
+async def test_successful_booking_is_saved_to_memory() -> None:
+    booking_service = FakeBookingService(booking=_booking())
+    llm = FakeLLMProvider(
+        tool_calls=[_booking_tool_call(VALID_ARGUMENTS)]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    await harness.service.answer("conv-1", "Book me an interview")
+
+    assert harness.memory.appended == [
+        ("conv-1", "user", "Book me an interview"),
+        (
+            "conv-1",
+            "assistant",
+            "Your interview has been booked for "
+            "2026-10-10 at 14:00.",
+        ),
+    ]
+
+
+async def test_unknown_tool_call_falls_back_to_content() -> None:
+    llm = FakeLLMProvider(
+        content="fallback text",
+        tool_calls=[ToolCall(name="unknown_tool", arguments={})],
+    )
+    harness = Harness(llm_provider=llm, tools=[BOOKING_TOOL])
+
+    result = await harness.service.answer("conv-1", "hi")
+
+    assert result.answer == "fallback text"
+
+
+async def test_tool_call_without_booking_service_raises_error() -> None:
+    llm = FakeLLMProvider(
+        tool_calls=[_booking_tool_call(VALID_ARGUMENTS)]
+    )
+    harness = Harness(llm_provider=llm, tools=[BOOKING_TOOL])
+
+    with pytest.raises(RAGError):
+        await harness.service.answer(
+            "conv-1", "Book an interview"
+        )
+
+    assert harness.memory.appended == []
+
+
+async def test_tool_call_persists_to_sqlite(tmp_path) -> None:
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/rag-booking.db"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    booking_service = BookingService(session_factory=session_factory)
+    llm = FakeLLMProvider(
+        tool_calls=[_booking_tool_call(VALID_ARGUMENTS)]
+    )
+    harness = Harness(
+        booking_service=booking_service,
+        llm_provider=llm,
+        tools=[BOOKING_TOOL],
+    )
+
+    result = await harness.service.answer(
+        "conv-1", "Book me an interview"
+    )
+
+    assert result.answer == (
+        "Your interview has been booked for 2026-10-10 at 14:00."
+    )
+    async with session_factory() as session:
+        rows = list(
+            (
+                await session.execute(select(InterviewBooking))
+            ).scalars().all()
+        )
+    assert len(rows) == 1
+    assert rows[0].name == "Binita Ghale"
+    assert rows[0].date == date(2026, 10, 10)
+    assert rows[0].time == time(14, 0)
+    await engine.dispose()
